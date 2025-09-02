@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Stop Chasing Ghost Capacity: Turning “Free-on-Paper” Into Real Free at Scale</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="How we cut GC runtime by 20% and sped up storage reclamation by 30% in our largest region—by adding the right metrics, prioritizing high-yield nodes, and using concurrency-based per-node tokens with a 60s re-score." />
+
+  <!-- Open Graph / Twitter -->
+  <meta property="og:type" content="article" />
+  <meta property="og:title" content="Stop Chasing Ghost Capacity: Turning “Free-on-Paper” Into Real Free at Scale" />
+  <meta property="og:description" content="We cut GC runtime by 20% and improved storage reclamation by 30% by adding the right metrics, ranking high-yield nodes, and scheduling with concurrency tokens." />
+  <meta property="og:image" content="https://vadirajh.github.io/ghost-capacity-blog/assets/social_v2.png" />
+  <meta property="og:url" content="https://vadirajh.github.io/ghost-capacity-blog/" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Stop Chasing Ghost Capacity: Turning “Free-on-Paper” Into Real Free at Scale" />
+  <meta name="twitter:description" content="−20% GC runtime, +30% reclamation in our largest region with metrics + concurrency tokens + 60s re-score." />
+  <meta name="twitter:image" content="https://vadirajh.github.io/ghost-capacity-blog/assets/social_v2.png" />
+
+  <style>
+    :root{
+      --bg:#0b1220;
+      --panel:#0f172a;
+      --ink:#e6ebf5;
+      --muted:#b9c3d4;
+      --accent:#3b82f6;
+      --good:#22c55e;
+      --warn:#f59e0b;
+      --pink:#a78bfa;
+      --card:#0f172acc;
+      --border:#1f2a44;
+      --code:#0b132b;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif}
+    .wrap{max-width:880px;margin:0 auto;padding:48px 20px 80px}
+    header{margin:8px 0 28px;text-align:center}
+    header h1{margin:0 0 10px;font-size:42px;line-height:1.2;letter-spacing:.2px}
+    header p.sub{margin:0;color:var(--muted);font-size:18px}
+    .badges{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin:22px 0 6px}
+    .badge{border:1px solid var(--border);color:#eaf0ff;background:linear-gradient(180deg,#1b2540,#121a31);padding:8px 12px;border-radius:999px;font-size:14px}
+    .badge.good{border-color:#1b3d2a;color:#eafff4;background:linear-gradient(180deg,#15321f,#0f2217)}
+    .badge.info{border-color:#1e3570}
+    .badge.note{border-color:#40321b}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px 22px;margin:22px 0}
+    h2{margin:28px 0 10px;font-size:28px;letter-spacing:.2px}
+    h3{margin:24px 0 8px;font-size:20px;color:#cfd7e8}
+    p{margin:12px 0}
+    ul{margin:10px 0 10px 22px}
+    li{margin:6px 0}
+    code, pre{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace}
+    pre{background:var(--code);border:1px solid #0c1a33;border-radius:12px;padding:14px;overflow:auto}
+    pre code{color:#e6f0ff}
+    .kpi{display:flex;gap:14px;flex-wrap:wrap;margin:18px 0}
+    .kpi .pill{border:1px dashed var(--border);padding:10px 14px;border-radius:999px;font-weight:600}
+    .pill.good{border-color:#275f3d;color:#9cf2b9}
+    .pill.info{border-color:#2b4ea1;color:#a7c9ff}
+    .pill.note{border-color:#7b4b17;color:#ffd9a3}
+    .callout{border-left:4px solid var(--accent);padding:10px 14px;background:#0e1729;border-radius:8px;margin:16px 0}
+    .muted{color:var(--muted)}
+    a{color:#9ec5ff;text-decoration:none;border-bottom:1px dashed #274a85}
+    a:hover{color:#cfe2ff;border-bottom-color:#5b86d6}
+    hr{border:0;border-top:1px solid var(--border);margin:32px 0}
+    footer{margin-top:40px;color:var(--muted);text-align:center}
+    .toc{list-style:none;padding:0;margin:10px 0 0}
+    .toc li{margin:4px 0}
+    .toc a{border:0}
+    .grid{display:grid;grid-template-columns:1fr;gap:16px}
+    @media (min-width:820px){ .grid{grid-template-columns:1fr 1fr} }
+    .tag{display:inline-block;background:#101a33;border:1px solid var(--border);padding:2px 8px;border-radius:6px;color:#cfe2ff;font-size:12px;margin:0 6px 6px 0}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Stop Chasing Ghost Capacity: Turning “Free-on-Paper” Into Real Free at Scale</h1>
+      <p class="sub">How we cut GC runtime by <strong>20%</strong> and sped up storage reclamation by <strong>30%</strong> in our largest region.</p>
+      <div class="badges">
+        <span class="badge good">Concurrency-based per-node tokens</span>
+        <span class="badge info">Re-score every 60s</span>
+        <span class="badge">Added missing metrics</span>
+      </div>
+    </header>
+
+    <div class="card">
+      <h2 id="tldr">TL;DR</h2>
+      <ul>
+        <li><strong>“Free-on-paper”</strong> = space marked free in metadata but <em>not allocatable</em> until GC compacts/moves data.</li>
+        <li><strong>Uniform GC</strong> worked in smaller regions; at <strong>thousands of servers</strong> it reclaimed too slowly.</li>
+        <li>We added the <strong>missing metrics</strong>, ranked servers by <strong>gc-able extents</strong>, scheduled with <strong>concurrency tokens</strong> per node, and <strong>re-scored every 60s</strong>.</li>
+        <li><strong>Results (largest region):</strong> GC runtime <strong>−20%</strong>, usable storage surfaced <strong>+30%</strong>.</li>
+      </ul>
+    </div>
+
+    <nav class="card">
+      <strong>Jump to:</strong>
+      <ul class="toc">
+        <li><a href="#why-uniform">Why uniform GC broke at large scale</a></li>
+        <li><a href="#instrument">Step 1 — Instrument first (add the missing metrics)</a></li>
+        <li><a href="#fragmentation">Why fragmentation slows reclaim (quick math)</a></li>
+        <li><a href="#prioritize">Step 2 — Prioritize high-yield nodes (concurrency tokens)</a></li>
+        <li><a href="#results">Results</a></li>
+        <li><a href="#rollout">Rollout plan</a></li>
+        <li><a href="#dashboards">What to watch on dashboards</a></li>
+        <li><a href="#when-uniform">When uniform GC is still fine</a></li>
+        <li><a href="#future">Future enhancements</a></li>
+        <li><a href="#takeaway">Takeaway</a></li>
+      </ul>
+    </nav>
+
+    <section id="why-uniform">
+      <h2>Why uniform GC broke at large scale</h2>
+      <p>Uniform scheduling assumes servers are “roughly equal.” That held in smaller regions. In our biggest region—with <strong>thousands</strong> of storage servers—three scale effects slowed capacity return:</p>
+      <ul>
+        <li><strong>Heavy-tailed variance:</strong> a minority of servers held a disproportionate share of <em>gc-able extents</em>. Uniform GC wasted cycles on low-yield nodes while high-yield nodes waited.</li>
+        <li><strong>Straggler/fan-out penalties:</strong> scattering GC everywhere created many small, low-yield cleanups; time-to-reclaim was gated by slow/busy nodes.</li>
+        <li><strong>Hot-node blindness (no metrics):</strong> we initially had <em>no per-server GC/I&O signals</em>. Uniform GC sometimes piled extra work onto already busy nodes, inflating high-percentile latencies.</li>
+      </ul>
+    </section>
+
+    <section id="instrument">
+      <h2>Step 1 — Instrument first (add the missing metrics)</h2>
+      <p>Before changing scheduling, we shipped lightweight per-server metrics and short-window EWMAs so the scheduler saw fresh, low-noise signals:</p>
+      <div class="grid">
+        <div class="card">
+          <h3>Core signals</h3>
+          <span class="tag">GC-eligible bytes/extents</span>
+          <span class="tag">I/O queue depth</span>
+          <span class="tag">Disk busy %</span>
+          <span class="tag">p95 / p99 latency</span>
+          <span class="tag">Recent GC completions</span>
+        </div>
+        <div class="card">
+          <h3>Why EWMA?</h3>
+          <p><strong>Exponentially Weighted Moving Average</strong> emphasizes recent samples while damping noise. Tune via half-life to balance responsiveness vs. stability for re-scores every <strong>60s</strong>.</p>
+          <pre><code>S_t = α·x_t + (1−α)·S_{t−1}   // α from chosen half-life or span</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section id="fragmentation">
+      <h2>A 10-second refresher: why fragmentation slows reclaim</h2>
+      <p>GC frees space at <em>segment</em> granularity. If a segment is <code>u%</code> invalid, you must relocate <code>(1−u)%</code> live data to free it. A handy rule-of-thumb:</p>
+      <div class="callout">
+        <strong>Cleaning yield</strong> ≈ <code>u / (1 − u)</code><br/>
+        <span class="muted">u = 20% → yield 0.25 → move 4B to free 1B (bad)<br/>
+        u = 60% → yield 1.5 → free 1.5B per 1B moved (good)</span>
+      </div>
+      <p>At scale, frees are scattered → many segments with low <code>u</code> → <strong>low yield</strong>, high write-amp, slow capacity return.</p>
+    </section>
+
+    <section id="prioritize">
+      <h2>Step 2 — Prioritize high-yield nodes (with concurrency tokens)</h2>
+      <p><strong>Measure → Rank → Schedule → Refresh</strong></p>
+      <ul>
+        <li><strong>Rank</strong> each server by a composite score (recomputed every <strong>60s</strong>):</li>
+      </ul>
+      <pre><code>score(node) = w1*gc_extents − w2*io_pressure − w3*recent_gc + w4*age</code></pre>
+      <ul>
+        <li><strong>Concurrency tokens (per node):</strong> each node gets a small integer budget—the <em>max number of GC jobs that may run concurrently</em> on that node.
+          <ul>
+            <li>Start with <code>base_concurrency = 1–2</code> per node.</li>
+            <li>Make it adaptive to I/O pressure: shrink concurrency as nodes get hot.</li>
+          </ul>
+        </li>
+      </ul>
+      <pre><code>max_conc_eff[node] = max( floor(base_conc[node] * scale(io_pressure[node])), conc_floor )</code></pre>
+      <ul>
+        <li><strong>Fairness:</strong> from the top-K nodes by score, assign work via <em>weighted round-robin</em> (weight = score), spreading across racks/failure domains.</li>
+        <li><strong>Cooldown &amp; aging:</strong> after a job completes on a node, apply a cooldown penalty to avoid re-hammering; add aging so low-score nodes eventually get service.</li>
+      </ul>
+
+      <h3>Pseudocode (60s re-score + concurrency tokens)</h3>
+      <pre><code>every 60s:
+  for node in nodes:
+    score[node] = w1*gc_extents[node] - w2*io_pressure[node] - w3*recent_gc[node] + w4*age[node]
+    max_conc_eff[node] = max( floor(base_conc[node] * scale(io_pressure[node])), conc_floor )
+  heap = max_heap(score)
+
+every tick (e.g., 200ms):
+  for node in weighted_rr(topK(heap, K), weight=score):
+    if active_gc[node] &lt; max_conc_eff[node] and healthy(node):
+      assign_gc(node)      # consumes 1 token
+      active_gc[node] += 1
+
+on_gc_finish(node):
+  active_gc[node] -= 1
+  recent_gc[node] = decay(recent_gc[node]) + 1</code></pre>
+
+      <div class="callout">
+        <strong>Worker guardrails:</strong> process in bounded chunks; yield briefly if local p99/queue depth blip. If health gates trip, abort and requeue elsewhere.
+      </div>
+    </section>
+
+    <section id="results">
+      <h2>Results</h2>
+      <div class="kpi">
+        <span class="pill good">GC runtime ↓ 20%</span>
+        <span class="pill info">Storage reclamation ↑ 30%</span>
+      </div>
+      <p>In our largest region, we reduced wall-clock GC runtime per cycle by <strong>20%</strong> and increased allocatable GiB/hour surfaced by <strong>30%</strong>, with steadier high percentiles during churn and fewer GC-vs-foreground collisions.</p>
+    </section>
+
+    <section id="rollout">
+      <h2>Rollout plan (safe &amp; boring)</h2>
+      <ol>
+        <li><strong>Instrument first</strong> (compute scores; no scheduling change).</li>
+        <li>Turn on <strong>concurrency tokens</strong>; verify hot-node protection.</li>
+        <li>Enable <strong>top-K targeting</strong> at low weight; watch capacity surface rate and p95/p99.</li>
+        <li>Increase weights/K gradually; keep a <strong>feature flag</strong> to fall back to uniform.</li>
+      </ol>
+    </section>
+
+    <section id="dashboards">
+      <h2>What to watch on dashboards</h2>
+      <ul>
+        <li><strong>active_gc per node</strong>, queue length, and <strong>max_conc_eff</strong> over time</li>
+        <li><strong>Capacity surfaced (GiB/hour)</strong> and <strong>time-to-reclaim</strong> (e.g., 1 TiB)</li>
+        <li><strong>p95/p99</strong> of writes and metadata ops during churn</li>
+        <li><strong>Skip reasons</strong> (no tokens, health gate, cooldown) to validate fairness vs. protection</li>
+      </ul>
+    </section>
+
+    <section id="when-uniform">
+      <h2>When uniform GC is still fine</h2>
+      <ul>
+        <li>Small regions with <strong>low variance</strong> across servers</li>
+        <li>Low-churn windows or maintenance batches</li>
+        <li>Fallback mode (“clean a little everywhere”)</li>
+      </ul>
+      <p>At large scale, targeted GC becomes the default; uniform remains a simple Plan B.</p>
+    </section>
+
+    <section id="future">
+      <h2>Future enhancements</h2>
+      <ul>
+        <li><strong>MB/s caps (bandwidth tokens):</strong> per-node token buckets for device/network MB/s to complement concurrency.</li>
+        <li><strong>Hybrid quotas (hierarchical):</strong> budgets at <em>cluster → rack → node</em>; per-tenant GC quotas if you track ownership.</li>
+        <li><strong>Job sizing &amp; weighting:</strong> tag GC tasks (light/medium/heavy) so heavy ones consume 2 tokens or are chunked smaller.</li>
+        <li><strong>EC-aware cost:</strong> prefer segments whose reclaim requires fewer parity recomputes/hops; penalize partial-stripe cleans.</li>
+        <li><strong>Predictive scoring:</strong> short-term forecasts (EWMA trends, bandit/explore-exploit) to chase emerging high-yield nodes sooner.</li>
+        <li><strong>PID-style auto-tuner:</strong> adjust base_concurrency per node to hold a target p99 while maximizing GiB/hour.</li>
+        <li><strong>Rack-aware fairness:</strong> ensure at least one token per rack (when healthy) to keep surface rate resilient to single-rack hotspots.</li>
+      </ul>
+    </section>
+
+    <section id="takeaway" class="card">
+      <h2>Takeaway</h2>
+      <p>Uniform GC scales until variance dominates. With the <strong>right metrics</strong>, <strong>concurrency-based per-node tokens</strong>, and a <strong>60-second re-score</strong>, prioritizing high-yield nodes turned ghost capacity into real headroom—cutting <strong>GC runtime by 20%</strong> and boosting <strong>reclamation by 30%</strong> in our biggest region.</p>
+    </section>
+
+    <hr/>
+    <footer>
+      <div>Last updated: September 1, 2025 • <a href="https://vadirajh.github.io/ghost-capacity-blog/">v1.0</a></div>
+      <div class="muted">© 2025 — Author: <a href="https://github.com/vadirajh">Vadiraj H</a></div>
+    </footer>
+  </div>
+</body>
+</html>
