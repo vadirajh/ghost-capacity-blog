@@ -139,7 +139,7 @@
     </section>
 
     <section id="fragmentation">
-      <h2>A 10-second refresher: why fragmentation slows reclaim</h2>
+      <h2>Why fragmentation slows reclaim</h2>
       <p>GC frees space at <em>segment</em> granularity. If a segment is <code>u%</code> invalid, you must relocate <code>(1−u)%</code> live data to free it. A handy rule-of-thumb:</p>
       <div class="callout">
         <strong>Cleaning yield</strong> ≈ <code>u / (1 − u)</code><br/>
@@ -202,7 +202,7 @@ on_gc_finish(node):
     </section>
 
     <section id="rollout">
-      <h2>Rollout plan (safe &amp; boring)</h2>
+      <h2>Rollout plan </h2>
       <ol>
         <li><strong>Instrument first</strong> (compute scores; no scheduling change).</li>
         <li>Turn on <strong>concurrency tokens</strong>; verify hot-node protection.</li>
@@ -234,13 +234,12 @@ on_gc_finish(node):
     <section id="future">
       <h2>Future enhancements</h2>
       <ul>
-        <li><strong>MB/s caps (bandwidth tokens):</strong> per-node token buckets for device/network MB/s to complement concurrency.</li>
-        <li><strong>Hybrid quotas (hierarchical):</strong> budgets at <em>cluster → rack → node</em>; per-tenant GC quotas if you track ownership.</li>
         <li><strong>Job sizing &amp; weighting:</strong> tag GC tasks (light/medium/heavy) so heavy ones consume 2 tokens or are chunked smaller.</li>
         <li><strong>EC-aware cost:</strong> prefer segments whose reclaim requires fewer parity recomputes/hops; penalize partial-stripe cleans.</li>
         <li><strong>Predictive scoring:</strong> short-term forecasts (EWMA trends, bandit/explore-exploit) to chase emerging high-yield nodes sooner.</li>
         <li><strong>PID-style auto-tuner:</strong> adjust base_concurrency per node to hold a target p99 while maximizing GiB/hour.</li>
         <li><strong>Rack-aware fairness:</strong> ensure at least one token per rack (when healthy) to keep surface rate resilient to single-rack hotspots.</li>
+        <li><strong>Rescore at 5s-30s interval:</strong> lot can change in 60s; a more frequent rescore will give a better view of the current world and hence a better performance</li>
       </ul>
     </section>
 
