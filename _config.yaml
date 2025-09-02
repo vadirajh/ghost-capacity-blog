@@ -1,0 +1,18 @@
+title: "Stop Chasing Ghost Capacity"
+description: "How we cut GC runtime by 20% and improved reclamation by 30% at scale."
+theme: minima
+plugins:
+  - jekyll-seo-tag
+  - jekyll-feed
+  - jekyll-sitemap
+url: "https://vadirajh.github.io"          # change to your GitHub username site
+baseurl: "/ghost-capacity-blog"          # repo name (omit for user/org site)
+author:
+  name: "Vadiraj Hosur"
+  url: "https://www.linkedin.com/in/vadirajhosur/"
+# Social/OG image used in previews:
+defaults:
+  - scope: { path: "" }
+    values:
+      image: /assets/social.png
+
